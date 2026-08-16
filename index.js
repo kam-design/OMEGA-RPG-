@@ -46,13 +46,19 @@ async function startBot() {
     driver: sqlite3.Database
   });
 
+  // Updated Database Schema
   await db.exec(`
     CREATE TABLE IF NOT EXISTS players (
       jid TEXT PRIMARY KEY,
       name TEXT,
-      power TEXT,
+      race TEXT DEFAULT 'None',
+      family_name TEXT DEFAULT 'Unknown',
+      level INTEGER DEFAULT 1,
       exp INTEGER DEFAULT 0,
-      gold INTEGER DEFAULT 0
+      coins INTEGER DEFAULT 0,
+      hp INTEGER DEFAULT 300,
+      aether INTEGER DEFAULT 300,
+      kingdom TEXT DEFAULT 'None'
     )
   `);
 
@@ -99,48 +105,93 @@ async function startBot() {
 
     const chatId = msg.key.remoteJid;
     const sender = msg.key.participant || msg.key.remoteJid;
-    const pushName = msg.pushName || 'Noob';
+    const pushName = msg.pushName || 'Player';
 
     const text = msg.message.conversation || 
                  msg.message.extendedTextMessage?.text || 
                  msg.message.imageMessage?.caption || '';
 
-    console.log(`📩 Received message: "${text}" from ${sender}`);
+    if (!text.startsWith('#')) return; // Ignore non-commands
+
+    console.log(`📩 Received command: "${text}" from ${sender}`);
 
     const args = text.trim().split(' ');
     const command = args[0].toLowerCase();
+    
+    // Fetch player data for every command
+    const player = await db.get('SELECT * FROM players WHERE jid = ?', [sender]);
+    const userTag = `@${sender.split('@')[0]}`;
 
     // Command: #start
     if (command === '#start') {
-      console.log('⚡ Running #start command...');
-      try {
-        await db.run(
-          `INSERT INTO players (jid, name, power) VALUES (?, ?, ?) 
-           ON CONFLICT(jid) DO UPDATE SET name=excluded.name`,
-          [sender, pushName, 'Shadow Monarch']
-        );
-
-        await sock.sendMessage(chatId, {
-          text: `🔥 Welcome @${sender.split('@')[0]}! Registered in SQLite.\nPower: *Shadow Monarch*\n\n` +
-                `🎮 *Quick Commands:*\n` +
-                `• \`#omega [question]\` - Ask the official RPG AI Guide\n` +
-                `• \`#map\` - View world map & regions`,
-          mentions: [sender]
+      if (!player) {
+        await db.run('INSERT INTO players (jid, name) VALUES (?, ?)', [sender, pushName]);
+      } else if (player.race !== 'None') {
+        return sock.sendMessage(chatId, { 
+          text: `⚠️ ${userTag}, you are already registered as a *${player.race}*! Type \`#profile\` to see your stats.`, 
+          mentions: [sender] 
         });
-        console.log('✅ #start reply sent.');
-      } catch (err) {
-        console.error('Database/Message Error (#start):', err.message);
       }
-      return;
+
+      const startMsg = `⚔️ *Welcome to The Land of Aeternum, ${userTag}!*\n\n` +
+                       `Before you begin your journey, you must choose your race. *(This is permanent!)*\n\n` +
+                       `👤 *#human*\n[Advantage] Versatile. Can learn both magic and warrior skills.\n\n` +
+                       `🧝 *#elf*\n[Advantage] High magical affinity. Masters of spellcasting.\n\n` +
+                       `⛏️ *#dwarf*\n[Advantage] High durability. Best in melee combat and weapon forging.\n\n` +
+                       `Reply with your chosen race command to lock it in.`;
+      
+      return sock.sendMessage(chatId, { text: startMsg, mentions: [sender] });
+    }
+
+    // Command: Race Selection
+    if (['#human', '#elf', '#dwarf'].includes(command)) {
+      if (!player) {
+        return sock.sendMessage(chatId, { text: `❌ ${userTag}, type \`#start\` first to begin!`, mentions: [sender] });
+      }
+      if (player.race !== 'None') {
+        return sock.sendMessage(chatId, { text: `❌ ${userTag}, you are already a *${player.race}*. No going back now.`, mentions: [sender] });
+      }
+
+      let raceName, kingdom;
+      if (command === '#human') { raceName = 'Human'; kingdom = 'Kingdom of Eldoria'; }
+      if (command === '#elf') { raceName = 'Elf'; kingdom = 'Kingdom of Sylvaris'; }
+      if (command === '#dwarf') { raceName = 'Dwarf'; kingdom = 'Village of Stonebridge'; }
+
+      await db.run('UPDATE players SET race = ?, kingdom = ? WHERE jid = ?', [raceName, kingdom, sender]);
+
+      return sock.sendMessage(chatId, { 
+        text: `✅ ${userTag}, you are now a *${raceName}* of the *${kingdom}*!\nType \`#profile\` to view your stats.`,
+        mentions: [sender]
+      });
+    }
+
+    // Command: #profile
+    if (command === '#profile') {
+      if (!player || player.race === 'None') {
+        return sock.sendMessage(chatId, { text: `❌ ${userTag}, you haven't fully registered yet. Type \`#start\` and choose a race!`, mentions: [sender] });
+      }
+
+      const profileMsg = `📜 *PROFILE: ${userTag}*\n` +
+                         `━━━━━━━━━━━━━━━━━━\n` +
+                         `📛 *Name:* ${player.name}\n` +
+                         `🩸 *Family Name:* ${player.family_name}\n` +
+                         `🧬 *Race:* ${player.race}\n` +
+                         `🏰 *Origin:* ${player.kingdom}\n\n` +
+                         `📊 *Level:* ${player.level}\n` +
+                         `✨ *XP:* ${player.exp}\n` +
+                         `🪙 *Coins:* ${player.coins}\n\n` +
+                         `❤️ *HP:* ${player.hp} / 300\n` +
+                         `🌀 *Aether:* ${player.aether} / 300`;
+
+      return sock.sendMessage(chatId, { text: profileMsg, mentions: [sender] });
     }
 
     // Command: #map
     if (command === '#map') {
-      console.log('⚡ Running #map command...');
       try {
         const mapPath = './map.png';
         if (!fs.existsSync(mapPath)) {
-          return await sock.sendMessage(chatId, { text: '❌ Map image file (`map.png`) not found on server.' });
+          return await sock.sendMessage(chatId, { text: `❌ ${userTag}, Map image file not found on server.`, mentions: [sender] });
         }
 
         const mapCaption = `🗺️ *WORLD MAP OF AETERNUM*\n\n` +
@@ -154,35 +205,29 @@ async function startBot() {
           `• Demon's Hollow (Demon Zone)\n` +
           `• The Blackwood (Dark Forest)`;
 
-        await sock.sendMessage(chatId, {
-          image: fs.readFileSync(mapPath),
-          caption: mapCaption
-        });
-        console.log('✅ #map reply sent.');
+        await sock.sendMessage(chatId, { image: fs.readFileSync(mapPath), caption: mapCaption });
       } catch (err) {
-        console.error('Error sending map (#map):', err.message);
+        console.error('Error sending map:', err.message);
       }
       return;
     }
 
-    // Command: #omega (Official AI Guide)
+    // Command: #omega
     if (command === '#omega') {
-      console.log('⚡ Running #omega command...');
       const userPrompt = args.slice(1).join(' ');
       if (!userPrompt) {
         return sock.sendMessage(chatId, { 
-          text: '🔮 *OMEGA RPG GUIDE*\n\nUsage: `#omega [question]`\nExample: `#omega how do I level up fast?`' 
+          text: `🔮 *OMEGA RPG GUIDE*\n\nUsage: \`#omega [question]\`\nExample: \`#omega how do I level up fast?\``,
+          mentions: [sender]
         });
       }
 
       try {
         await sock.sendPresenceUpdate('composing', chatId);
         const aiReply = await askOmegaGuide(userPrompt);
-
-        await sock.sendMessage(chatId, { text: `🔮 *OMEGA GUIDE:*\n\n${aiReply}` });
-        console.log('✅ #omega reply sent.');
+        await sock.sendMessage(chatId, { text: `🔮 *OMEGA GUIDE for ${userTag}:*\n\n${aiReply}`, mentions: [sender] });
       } catch (err) {
-        console.error('AI/Message Error (#omega):', err.message);
+        console.error('AI Error:', err.message);
       }
       return;
     }
