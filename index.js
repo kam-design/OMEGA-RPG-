@@ -4,6 +4,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import express from 'express';
 import pino from 'pino';
+import fs from 'fs';
 import 'dotenv/config';
 
 // 1. Health Server for Render
@@ -119,12 +120,43 @@ async function startBot() {
         );
 
         await sock.sendMessage(chatId, {
-          text: `🔥 Welcome @${sender.split('@')[0]}! Registered in SQLite.\nPower: *Shadow Monarch*\nTest AI with: \`#testai [prompt]\``,
+          text: `🔥 Welcome @${sender.split('@')[0]}! Registered in SQLite.\nPower: *Shadow Monarch*\nTest AI with: \`#testai [prompt]\` | View Map: \`#map\``,
           mentions: [sender]
         });
         console.log('✅ #start reply sent.');
       } catch (err) {
         console.error('Database/Message Error (#start):', err.message);
+      }
+      return;
+    }
+
+    // Command: #map
+    if (command === '#map') {
+      console.log('⚡ Running #map command...');
+      try {
+        const mapPath = './map.png';
+        if (!fs.existsSync(mapPath)) {
+          return await sock.sendMessage(chatId, { text: '❌ Map image file (`map.png`) not found on server.' });
+        }
+
+        const mapCaption = `🗺️ *WORLD MAP OF AETERNUM*\n\n` +
+          `🏰 *Kingdoms:*\n` +
+          `• Kingdom of Eldoria\n` +
+          `• Kingdom of Sylvaris\n\n` +
+          `🏡 *Villages:*\n` +
+          `• Village of Stonebridge\n` +
+          `• Village of Oakwood\n\n` +
+          `🔥 *Danger Zones:*\n` +
+          `• Demon's Hollow (Demon Zone)\n` +
+          `• The Blackwood (Dark Forest)`;
+
+        await sock.sendMessage(chatId, {
+          image: fs.readFileSync(mapPath),
+          caption: mapCaption
+        });
+        console.log('✅ #map reply sent.');
+      } catch (err) {
+        console.error('Error sending map (#map):', err.message);
       }
       return;
     }
