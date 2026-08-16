@@ -1,5 +1,4 @@
-import baileys from '@whiskeysockets/baileys';
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import { Groq } from 'groq-sdk';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
