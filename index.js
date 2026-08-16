@@ -1,4 +1,5 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import baileys from '@whiskeysockets/baileys';
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
 import { Groq } from 'groq-sdk';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
@@ -58,12 +59,11 @@ async function startBot() {
   const sock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
-    printQRInTerminal: false // Explicitly disabled QR code terminal printing
+    printQRInTerminal: false
   });
 
-  // Pairing code flow for your number
   if (!sock.authState.creds.registered) {
-    const phoneNumber = "263719558719"; // 071 955 8719 in international format
+    const phoneNumber = "263719558719";
     
     setTimeout(async () => {
       try {
@@ -103,7 +103,6 @@ async function startBot() {
     const args = text.trim().split(' ');
     const command = args[0].toLowerCase();
 
-    // Command: #start
     if (command === '#start') {
       await db.run(
         `INSERT INTO players (jid, name, power) VALUES (?, ?, ?) 
@@ -117,7 +116,6 @@ async function startBot() {
       });
     }
 
-    // Command: #testai
     if (command === '#testai') {
       const userPrompt = args.slice(1).join(' ');
       if (!userPrompt) return sock.sendMessage(chatId, { text: '❌ Usage: `#testai roast me`' });
@@ -131,4 +129,3 @@ async function startBot() {
 }
 
 startBot();
-
