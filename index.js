@@ -92,37 +92,59 @@ async function startBot() {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     const msg = messages[0];
-    if (!msg.message || msg.key.fromMe) return;
+    if (!msg.message) return;
 
     const chatId = msg.key.remoteJid;
     const sender = msg.key.participant || msg.key.remoteJid;
     const pushName = msg.pushName || 'Noob';
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+
+    // Extract text across different WhatsApp message types
+    const text = msg.message.conversation || 
+                 msg.message.extendedTextMessage?.text || 
+                 msg.message.imageMessage?.caption || '';
+
+    console.log(`📩 Received message: "${text}" from ${sender}`);
 
     const args = text.trim().split(' ');
     const command = args[0].toLowerCase();
 
+    // Command: #start
     if (command === '#start') {
-      await db.run(
-        `INSERT INTO players (jid, name, power) VALUES (?, ?, ?) 
-         ON CONFLICT(jid) DO UPDATE SET name=excluded.name`,
-        [sender, pushName, 'Shadow Monarch']
-      );
+      console.log('⚡ Running #start command...');
+      try {
+        await db.run(
+          `INSERT INTO players (jid, name, power) VALUES (?, ?, ?) 
+           ON CONFLICT(jid) DO UPDATE SET name=excluded.name`,
+          [sender, pushName, 'Shadow Monarch']
+        );
 
-      return sock.sendMessage(chatId, {
-        text: `🔥 Welcome @${sender.split('@')[0]}! Registered in SQLite.\nPower: *Shadow Monarch*\nTest AI with: \`#testai [prompt]\``,
-        mentions: [sender]
-      });
+        await sock.sendMessage(chatId, {
+          text: `🔥 Welcome @${sender.split('@')[0]}! Registered in SQLite.\nPower: *Shadow Monarch*\nTest AI with: \`#testai [prompt]\``,
+          mentions: [sender]
+        });
+        console.log('✅ #start reply sent.');
+      } catch (err) {
+        console.error('Database/Message Error (#start):', err.message);
+      }
+      return;
     }
 
+    // Command: #testai
     if (command === '#testai') {
+      console.log('⚡ Running #testai command...');
       const userPrompt = args.slice(1).join(' ');
       if (!userPrompt) return sock.sendMessage(chatId, { text: '❌ Usage: `#testai roast me`' });
 
-      await sock.sendPresenceUpdate('composing', chatId);
-      const aiReply = await testGroq(userPrompt);
+      try {
+        await sock.sendPresenceUpdate('composing', chatId);
+        const aiReply = await testGroq(userPrompt);
 
-      return sock.sendMessage(chatId, { text: `🤖 *OMEGA AI:*\n${aiReply}` });
+        await sock.sendMessage(chatId, { text: `🤖 *OMEGA AI:*\n${aiReply}` });
+        console.log('✅ #testai reply sent.');
+      } catch (err) {
+        console.error('AI/Message Error (#testai):', err.message);
+      }
+      return;
     }
   });
 }
