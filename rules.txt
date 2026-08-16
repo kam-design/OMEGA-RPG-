@@ -1,0 +1,5 @@
+1. EXP is currently only gained by manual admin commands (combat is in development).
+2. Coins are earned by doing daily tasks or finding loot (in development).
+3. Max HP and Aether is 300.
+4. Races: Humans (Eldoria), Elves (Sylvaris), Dwarves (Stonebridge).
+5. There are no dungeons, quests, or alliances yet. This is an early beta.

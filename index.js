@@ -16,21 +16,31 @@ app.get('/health', (req, res) => res.status(200).send('OK'));
 
 app.listen(PORT, () => console.log(`🚀 Web server listening on port ${PORT}`));
 
-// 2. Initialize Groq AI Client
+// 2. Load Rules & Initialize Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const gameRules = fs.existsSync('./rules.txt') ? fs.readFileSync('./rules.txt', 'utf-8') : 'No rules defined yet.';
 
-async function askOmegaGuide(prompt) {
+async function askOmegaGuide(prompt, player) {
   try {
+    const systemPrompt = `You are OMEGA, a savage and sarcastic RPG AI guide.
+CURRENT GAME RULES:
+${gameRules}
+
+PLAYER ASKING THE QUESTION:
+Name: ${player.name} | Race: ${player.race} | Kingdom: ${player.kingdom} | Level: ${player.level} | XP: ${player.exp} | Coins: ${player.coins}
+
+CRITICAL RULES FOR YOU:
+1. DO NOT hallucinate features, quests, or dungeons that don't exist. Stick strictly to the CURRENT GAME RULES.
+2. DO NOT write paragraphs. Keep your reply to 1-3 sentences MAXIMUM.
+3. Be direct, address the player by their race or name, and don't sugarcoat anything.`;
+
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { 
-          role: 'system', 
-          content: 'You are OMEGA, the official AI guide and assistant for the OMEGA RPG game on WhatsApp. Help players understand game mechanics, lore, commands, and survival strategies in Aeternum. Keep your replies structured, helpful, concise, and in-character as an ancient RPG AI.' 
-        },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
       ],
-      max_tokens: 250
+      max_tokens: 100 // Hard cap on length so it physically cannot write essays
     });
     return completion.choices[0]?.message?.content || 'No response from OMEGA guide.';
   } catch (err) {
@@ -46,7 +56,6 @@ async function startBot() {
     driver: sqlite3.Database
   });
 
-  // Updated Database Schema
   await db.exec(`
     CREATE TABLE IF NOT EXISTS players (
       jid TEXT PRIMARY KEY,
@@ -72,7 +81,6 @@ async function startBot() {
 
   if (!sock.authState.creds.registered) {
     const phoneNumber = "263719558719";
-    
     setTimeout(async () => {
       try {
         const code = await sock.requestPairingCode(phoneNumber);
@@ -94,7 +102,7 @@ async function startBot() {
       console.log('Connection closed. Reconnecting:', shouldReconnect);
       if (shouldReconnect) startBot();
     } else if (connection === 'open') {
-      console.log('✅ OMEGA BOT SUCCESSFULLY CONNECTED TO WHATSAPP!');
+      console.log('✅ OMEGA BOT SUCCESSFULLY CONNECTED!');
     }
   });
 
@@ -106,51 +114,36 @@ async function startBot() {
     const chatId = msg.key.remoteJid;
     const sender = msg.key.participant || msg.key.remoteJid;
     const pushName = msg.pushName || 'Player';
+    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
 
-    const text = msg.message.conversation || 
-                 msg.message.extendedTextMessage?.text || 
-                 msg.message.imageMessage?.caption || '';
-
-    if (!text.startsWith('#')) return; // Ignore non-commands
-
-    console.log(`📩 Received command: "${text}" from ${sender}`);
+    if (!text.startsWith('#')) return;
 
     const args = text.trim().split(' ');
     const command = args[0].toLowerCase();
-    
-    // Fetch player data for every command
     const player = await db.get('SELECT * FROM players WHERE jid = ?', [sender]);
     const userTag = `@${sender.split('@')[0]}`;
 
-    // Command: #start
+    // #start
     if (command === '#start') {
       if (!player) {
         await db.run('INSERT INTO players (jid, name) VALUES (?, ?)', [sender, pushName]);
       } else if (player.race !== 'None') {
-        return sock.sendMessage(chatId, { 
-          text: `⚠️ ${userTag}, you are already registered as a *${player.race}*! Type \`#profile\` to see your stats.`, 
-          mentions: [sender] 
-        });
+        return sock.sendMessage(chatId, { text: `⚠️ ${userTag}, you are already registered as a *${player.race}*! Type \`#profile\`.`, mentions: [sender] });
       }
 
       const startMsg = `⚔️ *Welcome to The Land of Aeternum, ${userTag}!*\n\n` +
-                       `Before you begin your journey, you must choose your race. *(This is permanent!)*\n\n` +
+                       `Before you begin your journey, choose your race. *(Permanent!)*\n\n` +
                        `👤 *#human*\n[Advantage] Versatile. Can learn both magic and warrior skills.\n\n` +
                        `🧝 *#elf*\n[Advantage] High magical affinity. Masters of spellcasting.\n\n` +
-                       `⛏️ *#dwarf*\n[Advantage] High durability. Best in melee combat and weapon forging.\n\n` +
-                       `Reply with your chosen race command to lock it in.`;
-      
+                       `⛏️ *#dwarf*\n[Advantage] High durability. Best in melee combat.\n\n` +
+                       `Reply with your chosen race command.`;
       return sock.sendMessage(chatId, { text: startMsg, mentions: [sender] });
     }
 
-    // Command: Race Selection
+    // Race Selection
     if (['#human', '#elf', '#dwarf'].includes(command)) {
-      if (!player) {
-        return sock.sendMessage(chatId, { text: `❌ ${userTag}, type \`#start\` first to begin!`, mentions: [sender] });
-      }
-      if (player.race !== 'None') {
-        return sock.sendMessage(chatId, { text: `❌ ${userTag}, you are already a *${player.race}*. No going back now.`, mentions: [sender] });
-      }
+      if (!player) return sock.sendMessage(chatId, { text: `❌ ${userTag}, type \`#start\` first!`, mentions: [sender] });
+      if (player.race !== 'None') return sock.sendMessage(chatId, { text: `❌ ${userTag}, you are already a *${player.race}*.`, mentions: [sender] });
 
       let raceName, kingdom;
       if (command === '#human') { raceName = 'Human'; kingdom = 'Kingdom of Eldoria'; }
@@ -158,78 +151,41 @@ async function startBot() {
       if (command === '#dwarf') { raceName = 'Dwarf'; kingdom = 'Village of Stonebridge'; }
 
       await db.run('UPDATE players SET race = ?, kingdom = ? WHERE jid = ?', [raceName, kingdom, sender]);
-
-      return sock.sendMessage(chatId, { 
-        text: `✅ ${userTag}, you are now a *${raceName}* of the *${kingdom}*!\nType \`#profile\` to view your stats.`,
-        mentions: [sender]
-      });
+      return sock.sendMessage(chatId, { text: `✅ ${userTag}, you are now a *${raceName}* of the *${kingdom}*!`, mentions: [sender] });
     }
 
-    // Command: #profile
+    // #profile
     if (command === '#profile') {
-      if (!player || player.race === 'None') {
-        return sock.sendMessage(chatId, { text: `❌ ${userTag}, you haven't fully registered yet. Type \`#start\` and choose a race!`, mentions: [sender] });
-      }
-
-      const profileMsg = `📜 *PROFILE: ${userTag}*\n` +
-                         `━━━━━━━━━━━━━━━━━━\n` +
-                         `📛 *Name:* ${player.name}\n` +
-                         `🩸 *Family Name:* ${player.family_name}\n` +
-                         `🧬 *Race:* ${player.race}\n` +
-                         `🏰 *Origin:* ${player.kingdom}\n\n` +
-                         `📊 *Level:* ${player.level}\n` +
-                         `✨ *XP:* ${player.exp}\n` +
-                         `🪙 *Coins:* ${player.coins}\n\n` +
-                         `❤️ *HP:* ${player.hp} / 300\n` +
-                         `🌀 *Aether:* ${player.aether} / 300`;
-
+      if (!player || player.race === 'None') return sock.sendMessage(chatId, { text: `❌ ${userTag}, type \`#start\` and choose a race!`, mentions: [sender] });
+      
+      const profileMsg = `📜 *PROFILE: ${userTag}*\n━━━━━━━━━━━━━━━━━━\n📛 *Name:* ${player.name}\n🩸 *Family Name:* ${player.family_name}\n🧬 *Race:* ${player.race}\n🏰 *Origin:* ${player.kingdom}\n\n📊 *Level:* ${player.level}\n✨ *XP:* ${player.exp}\n🪙 *Coins:* ${player.coins}\n\n❤️ *HP:* ${player.hp} / 300\n🌀 *Aether:* ${player.aether} / 300`;
       return sock.sendMessage(chatId, { text: profileMsg, mentions: [sender] });
     }
 
-    // Command: #map
+    // #map
     if (command === '#map') {
-      try {
-        const mapPath = './map.png';
-        if (!fs.existsSync(mapPath)) {
-          return await sock.sendMessage(chatId, { text: `❌ ${userTag}, Map image file not found on server.`, mentions: [sender] });
-        }
-
-        const mapCaption = `🗺️ *WORLD MAP OF AETERNUM*\n\n` +
-          `🏰 *Kingdoms:*\n` +
-          `• Kingdom of Eldoria\n` +
-          `• Kingdom of Sylvaris\n\n` +
-          `🏡 *Villages:*\n` +
-          `• Village of Stonebridge\n` +
-          `• Village of Oakwood\n\n` +
-          `🔥 *Danger Zones:*\n` +
-          `• Demon's Hollow (Demon Zone)\n` +
-          `• The Blackwood (Dark Forest)`;
-
-        await sock.sendMessage(chatId, { image: fs.readFileSync(mapPath), caption: mapCaption });
-      } catch (err) {
-        console.error('Error sending map:', err.message);
+      const mapPath = './map.png';
+      if (!fs.existsSync(mapPath)) {
+        return await sock.sendMessage(chatId, { text: `❌ ${userTag}, Map image file not found on server. Did you git add map.png?`, mentions: [sender] });
       }
-      return;
+      const mapCaption = `🗺️ *WORLD MAP OF AETERNUM*\n\n🏰 *Kingdoms:*\n• Kingdom of Eldoria\n• Kingdom of Sylvaris\n\n🏡 *Villages:*\n• Village of Stonebridge\n• Village of Oakwood\n\n🔥 *Danger Zones:*\n• Demon's Hollow\n• The Blackwood`;
+      return await sock.sendMessage(chatId, { image: fs.readFileSync(mapPath), caption: mapCaption });
     }
 
-    // Command: #omega
+    // #omega
     if (command === '#omega') {
+      if (!player || player.race === 'None') return sock.sendMessage(chatId, { text: `❌ ${userTag}, register with \`#start\` first so I know who I'm talking to.`, mentions: [sender] });
+      
       const userPrompt = args.slice(1).join(' ');
-      if (!userPrompt) {
-        return sock.sendMessage(chatId, { 
-          text: `🔮 *OMEGA RPG GUIDE*\n\nUsage: \`#omega [question]\`\nExample: \`#omega how do I level up fast?\``,
-          mentions: [sender]
-        });
-      }
+      if (!userPrompt) return sock.sendMessage(chatId, { text: `🔮 Usage: \`#omega [question]\``, mentions: [sender] });
 
       try {
         await sock.sendPresenceUpdate('composing', chatId);
-        const aiReply = await askOmegaGuide(userPrompt);
-        await sock.sendMessage(chatId, { text: `🔮 *OMEGA GUIDE for ${userTag}:*\n\n${aiReply}`, mentions: [sender] });
+        const aiReply = await askOmegaGuide(userPrompt, player);
+        await sock.sendMessage(chatId, { text: `🔮 *OMEGA GUIDE:*\n\n${aiReply}`, mentions: [sender] });
       } catch (err) {
         console.error('AI Error:', err.message);
       }
-      return;
     }
   });
 }
