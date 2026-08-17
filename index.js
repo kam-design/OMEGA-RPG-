@@ -1,5 +1,4 @@
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import { Groq } from 'groq-sdk';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import express from 'express';
@@ -9,11 +8,8 @@ import 'dotenv/config';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('OMEGA RPG Bot Active'));
+app.get('/', (req, res) => res.send('Aeternum RPG Bot Active'));
 app.listen(PORT);
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const gameRules = fs.existsSync('./rules.txt') ? fs.readFileSync('./rules.txt', 'utf-8') : '';
 
 // Static Game Data
 const SPELLS = {
@@ -48,18 +44,6 @@ const WEAPONS = {
   'muramasa': { name: 'Muramasa', tier: 'God', level: 60, price: 1500, power: 80 }
 };
 
-async function askOmegaGuide(prompt, player) {
-  try {
-    const sysPrompt = `You are OMEGA, an RPG AI guide. Rules:\n${gameRules}\nPlayer: ${player.name} (${player.race}, Lvl ${player.level}). Keep answers under 3 sentences!`;
-    const res = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'system', content: sysPrompt }, { role: 'user', content: prompt }],
-      max_tokens: 100
-    });
-    return res.choices[0]?.message?.content || 'No answer.';
-  } catch (e) { return `Error: ${e.message}`; }
-}
-
 async function startBot() {
   const db = await open({ filename: './database.sqlite', driver: sqlite3.Database });
 
@@ -75,16 +59,39 @@ async function startBot() {
   `);
 
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-  const sock = makeWASocket({ auth: state, logger: pino({ level: 'silent' }), printQRInTerminal: false });
+  const sock = makeWASocket({ 
+    auth: state, 
+    logger: pino({ level: 'silent' }), 
+    printQRInTerminal: false,
+    browser: ["Ubuntu", "Chrome", "20.0.04"]
+  });
 
   if (!sock.authState.creds.registered) {
+    const phoneNumber = "263719558719";
     setTimeout(async () => {
-      const code = await sock.requestPairingCode("263719558719");
-      console.log(`\n🔑 WHATSAPP PAIRING CODE: ${code}\n`);
-    }, 3000);
+      try {
+        const code = await sock.requestPairingCode(phoneNumber);
+        console.log(`\n==================================`);
+        console.log(`🔑 WHATSAPP PAIRING CODE: ${code}`);
+        console.log(`==================================\n`);
+      } catch (err) {
+        console.error('❌ Error generating pairing code:', err.message);
+      }
+    }, 4000);
   }
 
   sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect } = update;
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('Connection closed. Reconnecting:', shouldReconnect);
+      if (shouldReconnect) startBot();
+    } else if (connection === 'open') {
+      console.log('✅ AETERNUM RPG BOT SUCCESSFULLY CONNECTED!');
+    }
+  });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
@@ -206,15 +213,14 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: `⚔️ ${userTag} purchased and equipped *${weapon.name}*!`, mentions: [sender] });
     }
 
-    // #omega
-    if (command === '#omega') {
-      if (!player || player.race === 'None') return sock.sendMessage(chatId, { text: `❌ Register with \`#start\` first.`, mentions: [sender] });
-      const userPrompt = args.slice(1).join(' ');
-      if (!userPrompt) return sock.sendMessage(chatId, { text: `🔮 Usage: \`#omega [question]\``, mentions: [sender] });
-
-      await sock.sendPresenceUpdate('composing', chatId);
-      const aiReply = await askOmegaGuide(userPrompt, player);
-      return sock.sendMessage(chatId, { text: `🔮 *OMEGA GUIDE:*\n\n${aiReply}`, mentions: [sender] });
+    // #map
+    if (command === '#map') {
+      const mapPath = './map.png';
+      if (!fs.existsSync(mapPath)) {
+        return await sock.sendMessage(chatId, { text: `❌ ${userTag}, Map image file not found on server.`, mentions: [sender] });
+      }
+      const mapCaption = `🗺️ *WORLD MAP OF AETERNUM*\n\n🏰 *Kingdoms:*\n• Kingdom of Eldoria\n• Kingdom of Sylvaris\n\n🏡 *Villages:*\n• Village of Stonebridge\n• Village of Oakwood\n\n🔥 *Danger Zones:*\n• Demon's Hollow\n• The Blackwood`;
+      return await sock.sendMessage(chatId, { image: fs.readFileSync(mapPath), caption: mapCaption });
     }
   });
 }
