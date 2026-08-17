@@ -79,7 +79,7 @@ async function startBot() {
 
   if (!sock.authState.creds.registered) {
     setTimeout(async () => {
-      const code = await sock.requestPairingCode("263787794041");
+      const code = await sock.requestPairingCode("263719558719");
       console.log(`\n🔑 WHATSAPP PAIRING CODE: ${code}\n`);
     }, 3000);
   }
