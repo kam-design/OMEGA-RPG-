@@ -4,14 +4,12 @@ import { open } from 'sqlite';
 import express from 'express';
 import pino from 'pino';
 import fs from 'fs';
-import 'dotenv/config';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Aeternum RPG Bot Active'));
 app.listen(PORT);
 
-// Static Game Data
 const SPELLS = {
   'minor heal': { name: 'Minor Heal', tier: 'Basic', level: 1, cost: 10, power: 20, type: 'heal' },
   'fire blast': { name: 'Fire Blast', tier: 'Basic', level: 1, cost: 10, power: 20, type: 'damage' },
@@ -44,6 +42,15 @@ const WEAPONS = {
   'muramasa': { name: 'Muramasa', tier: 'God', level: 60, price: 1500, power: 80 }
 };
 
+const activeBattles = {};
+const cooldowns = {};
+
+function getDamage(basePower, rank) {
+  if (rank === 'Adept') return basePower * 2;
+  if (rank === 'Master') return basePower * 4;
+  return basePower;
+}
+
 async function startBot() {
   const db = await open({ filename: './database.sqlite', driver: sqlite3.Database });
 
@@ -65,20 +72,6 @@ async function startBot() {
     printQRInTerminal: false,
     browser: ["Ubuntu", "Chrome", "20.0.04"]
   });
-
-  if (!sock.authState.creds.registered) {
-    const phoneNumber = "263719558719";
-    setTimeout(async () => {
-      try {
-        const code = await sock.requestPairingCode(phoneNumber);
-        console.log(`\n==================================`);
-        console.log(`🔑 WHATSAPP PAIRING CODE: ${code}`);
-        console.log(`==================================\n`);
-      } catch (err) {
-        console.error('❌ Error generating pairing code:', err.message);
-      }
-    }, 4000);
-  }
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -110,7 +103,6 @@ async function startBot() {
     let player = await db.get('SELECT * FROM players WHERE jid = ?', [sender]);
     const userTag = `@${sender.split('@')[0]}`;
 
-    // #start
     if (command === '#start') {
       if (!player) {
         await db.run('INSERT INTO players (jid, name) VALUES (?, ?)', [sender, pushName]);
@@ -127,7 +119,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: startMsg, mentions: [sender] });
     }
 
-    // Race Selection
     if (['#human', '#elf', '#dwarf', '#orc'].includes(command)) {
       if (!player) return sock.sendMessage(chatId, { text: `❌ Type \`#start\` first!`, mentions: [sender] });
       if (player.race !== 'None') return sock.sendMessage(chatId, { text: `❌ Already a *${player.race}*.`, mentions: [sender] });
@@ -144,7 +135,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: `✅ ${userTag}, you are now an *${raceName}* of *${kingdom}*!\nGranted default spell: *Minor Heal*.`, mentions: [sender] });
     }
 
-    // #profile
     if (command === '#profile') {
       if (!player || player.race === 'None') return sock.sendMessage(chatId, { text: `❌ Register with \`#start\` first!`, mentions: [sender] });
       
@@ -165,7 +155,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: profileMsg, mentions: [sender] });
     }
 
-    // #magic
     if (command === '#magic') {
       const magicDirectory = `🪄 *AETERNUM SPELLBOOK*\n━━━━━━━━━━━━━━━━━━\n` +
         `🟢 *BASIC (Lvl 1 | 10 Aether)*\n• Minor Heal\n• Fire Blast\n• Water Slash\n• Air Blast\n• Earth Hurl\n\n` +
@@ -175,7 +164,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: magicDirectory, mentions: [sender] });
     }
 
-    // #learn [spell]
     if (command === '#learn') {
       if (!player || player.race === 'None') return sock.sendMessage(chatId, { text: `❌ Choose a race first!`, mentions: [sender] });
       const spellQuery = args.slice(1).join(' ').toLowerCase();
@@ -189,7 +177,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: `✨ ${userTag} learned *${spell.name}* [${spell.tier}]!`, mentions: [sender] });
     }
 
-    // #weapon
     if (command === '#weapon') {
       const weaponDirectory = `⚔️ *ARMORY DIRECTORY*\n━━━━━━━━━━━━━━━━━━\n` +
         `🟢 *BASIC (Lvl 1 | 50 Coins)*\n• Iron Sword\n• Steel Hammer\n• Hunting Bow\n• Steel Scythe\n• Spear\n\n` +
@@ -199,7 +186,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: weaponDirectory, mentions: [sender] });
     }
 
-    // #buyweapon [weapon]
     if (command === '#buyweapon') {
       if (!player || player.race === 'None') return sock.sendMessage(chatId, { text: `❌ Choose a race first!`, mentions: [sender] });
       const weaponQuery = args.slice(1).join(' ').toLowerCase();
@@ -213,7 +199,6 @@ async function startBot() {
       return sock.sendMessage(chatId, { text: `⚔️ ${userTag} purchased and equipped *${weapon.name}*!`, mentions: [sender] });
     }
 
-    // #map
     if (command === '#map') {
       const mapPath = './map.png';
       if (!fs.existsSync(mapPath)) {
@@ -221,6 +206,106 @@ async function startBot() {
       }
       const mapCaption = `🗺️ *WORLD MAP OF AETERNUM*\n\n🏰 *Kingdoms:*\n• Kingdom of Eldoria\n• Kingdom of Sylvaris\n\n🏡 *Villages:*\n• Village of Stonebridge\n• Village of Oakwood\n\n🔥 *Danger Zones:*\n• Demon's Hollow\n• The Blackwood`;
       return await sock.sendMessage(chatId, { image: fs.readFileSync(mapPath), caption: mapCaption });
+    }
+
+    if (command === '#challenge') {
+      const target = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+      if (!target) return sock.sendMessage(chatId, { text: "❌ Tag someone to challenge!" });
+      if (target === sender) return sock.sendMessage(chatId, { text: "❌ You can't fight yourself." });
+      
+      const targetPlayer = await db.get('SELECT hp FROM players WHERE jid = ?', [target]);
+      if (!targetPlayer) return sock.sendMessage(chatId, { text: "❌ That player is not registered!" });
+
+      activeBattles[sender] = { opponent: target };
+      activeBattles[target] = { opponent: sender }; 
+      
+      return sock.sendMessage(chatId, { 
+          text: `⚔️ ${userTag} challenged @${target.split('@')[0]}! The fight starts NOW!\nUse \`#attack\` or \`#cast [spell]\`.`, 
+          mentions: [sender, target] 
+      });
+    }
+
+    if (command === '#attack') {
+      if (!activeBattles[sender]) return sock.sendMessage(chatId, { text: "❌ You aren't in a battle!" });
+      
+      const now = Date.now();
+      if (cooldowns[sender] && now - cooldowns[sender] < 5000) {
+          const timeLeft = ((5000 - (now - cooldowns[sender])) / 1000).toFixed(1);
+          return sock.sendMessage(chatId, { text: `⏳ Cooldown! Wait ${timeLeft}s.` });
+      }
+      cooldowns[sender] = now;
+
+      const battle = activeBattles[sender];
+      const target = battle.opponent;
+      
+      const weaponData = WEAPONS[player.weapon.toLowerCase()];
+      if (!weaponData) return sock.sendMessage(chatId, { text: "❌ You don't have a valid weapon equipped." });
+
+      const damage = getDamage(weaponData.power, 'Novice'); 
+      const targetData = await db.get('SELECT hp FROM players WHERE jid = ?', [target]);
+      let newHp = targetData.hp - damage;
+
+      if (newHp <= 0) {
+          newHp = 300; 
+          await db.run('UPDATE players SET hp = ? WHERE jid = ?', [newHp, target]);
+          delete activeBattles[sender];
+          delete activeBattles[target];
+          return sock.sendMessage(chatId, { 
+              text: `🏆 ${userTag} struck down their opponent with ${weaponData.name}! You win! Target respawned.`, 
+              mentions: [sender] 
+          });
+      }
+
+      await db.run('UPDATE players SET hp = ? WHERE jid = ?', [newHp, target]);
+      return sock.sendMessage(chatId, { 
+          text: `⚔️ ${userTag} used ${weaponData.name} for ${damage} DMG!\nTarget HP: ${newHp}` 
+      });
+    }
+
+    if (command === '#cast') {
+      if (!activeBattles[sender]) return sock.sendMessage(chatId, { text: "❌ You aren't in a battle!" });
+      
+      const spellName = args.slice(1).join(' ').toLowerCase();
+      const spellData = SPELLS[spellName];
+      if (!spellData) return sock.sendMessage(chatId, { text: "❌ Unknown spell!" });
+
+      const now = Date.now();
+      if (cooldowns[sender] && now - cooldowns[sender] < 5000) {
+          const timeLeft = ((5000 - (now - cooldowns[sender])) / 1000).toFixed(1);
+          return sock.sendMessage(chatId, { text: `⏳ Cooldown! Wait ${timeLeft}s.` });
+      }
+
+      if (player.aether < spellData.cost) {
+          return sock.sendMessage(chatId, { text: "❌ Not enough Aether!" });
+      }
+      
+      const dbSpell = await db.get('SELECT rank FROM player_magic WHERE jid = ? AND spell_name = ?', [sender, spellData.name]);
+      if (!dbSpell) return sock.sendMessage(chatId, { text: `❌ You haven't learned ${spellData.name} yet.` });
+      
+      await db.run('UPDATE players SET aether = aether - ? WHERE jid = ?', [spellData.cost, sender]);
+      cooldowns[sender] = now;
+
+      const target = activeBattles[sender].opponent;
+      const damage = getDamage(spellData.power, dbSpell.rank);
+      
+      const targetData = await db.get('SELECT hp FROM players WHERE jid = ?', [target]);
+      let newHp = targetData.hp - damage;
+
+      if (newHp <= 0) {
+          newHp = 300; 
+          await db.run('UPDATE players SET hp = ? WHERE jid = ?', [newHp, target]);
+          delete activeBattles[sender];
+          delete activeBattles[target];
+          return sock.sendMessage(chatId, { 
+              text: `🔥 ${userTag} obliterated their opponent with ${spellData.name}! You win! Target respawned.`, 
+              mentions: [sender] 
+          });
+      }
+
+      await db.run('UPDATE players SET hp = ? WHERE jid = ?', [newHp, target]);
+      return sock.sendMessage(chatId, { 
+          text: `✨ ${userTag} cast ${spellData.name} for ${damage} DMG!\nTarget HP: ${newHp}` 
+      });
     }
   });
 }
